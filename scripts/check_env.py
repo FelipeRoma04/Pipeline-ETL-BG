@@ -18,6 +18,49 @@ def cmd_exists(name: str) -> bool:
     return os.system(f"where {name} >nul 2>&1") == 0
 
 
+def resolve_java_home() -> str | None:
+    candidates = [
+        os.getenv("JAVA_HOME"),
+        "C:/Program Files/Java/jdk-22",
+        "C:/Program Files/Java/jdk-21",
+        "C:/Program Files/Java/jdk-17",
+        "C:/Program Files/Java/jdk-11",
+    ]
+    for candidate in candidates:
+        if not candidate:
+            continue
+        path = Path(candidate)
+        if path.exists() and (path / "bin").exists():
+            return str(path)
+    return None
+
+
+def resolve_hadoop_home() -> str | None:
+    candidates = [
+        os.getenv("HADOOP_HOME"),
+        "C:/hadoop",
+        "C:/Hadoop",
+    ]
+    for candidate in candidates:
+        if not candidate:
+            continue
+        path = Path(candidate)
+        if path.exists() and (path / "bin").exists():
+            return str(path)
+    return None
+
+
+def ensure_path_contains(directory: str) -> None:
+    if not directory:
+        return
+    current = os.environ.get("PATH", "")
+    entries = [entry.strip() for entry in current.split(";") if entry.strip()]
+    normalized = str(Path(directory).resolve())
+    if normalized.lower() not in [entry.lower() for entry in entries]:
+        entries.insert(0, normalized)
+        os.environ["PATH"] = ";".join(entries)
+
+
 def main() -> int:
     repo_root = Path(__file__).resolve().parents[1]
     data_tmp = repo_root / "data" / "tmp"
@@ -27,18 +70,24 @@ def main() -> int:
     print(f"Python: {sys.version.split()[0]}")
     ensure(sys.version_info >= (3, 11), "Python >= 3.11")
 
-    java_ok = cmd_exists("java")
-    ensure(java_ok, "Java disponible en PATH")
-    if os.getenv("JAVA_HOME"):
-        ensure(Path(os.environ["JAVA_HOME"]).exists(), "JAVA_HOME apunta a un directorio válido")
+    java_home = resolve_java_home()
+    if java_home:
+        os.environ["JAVA_HOME"] = java_home
+        ensure_path_contains(str(Path(java_home) / "bin"))
+        ensure(Path(java_home).exists(), "JAVA_HOME apunta a un directorio válido")
     else:
-        print("[WARN] JAVA_HOME no está definido. En Windows normalmente debe apuntar a un JDK (8, 11 o 17).")
+        print("[WARN] JAVA_HOME no está definido. En Windows debe apuntar a un JDK instalado (por ejemplo, C:\\Program Files\\Java\\jdk-17).")
+    ensure(cmd_exists("java"), "Java disponible en PATH")
 
-    hadoop_home = os.getenv("HADOOP_HOME")
+    hadoop_home = resolve_hadoop_home()
     if hadoop_home:
+        os.environ["HADOOP_HOME"] = hadoop_home
+        ensure_path_contains(str(Path(hadoop_home) / "bin"))
         ensure(Path(hadoop_home).exists(), "HADOOP_HOME apunta a un directorio válido")
+        winutils = Path(hadoop_home) / "bin" / "winutils.exe"
+        ensure(winutils.exists(), f"winutils.exe existe en {winutils}")
     else:
-        print("[WARN] HADOOP_HOME no está definido; en Windows suele no ser necesario para Spark local, pero puede ser requerido por conectores o rutas especiales.")
+        print("[WARN] HADOOP_HOME no está definido. En Windows Spark local puede requerir una ruta raíz y winutils.exe en %HADOOP_HOME%\\bin.")
 
     try:
         import pyspark
@@ -57,9 +106,22 @@ def main() -> int:
     try:
         from pyspark.sql import SparkSession
 
+        if not os.environ.get("JAVA_HOME"):
+            os.environ["JAVA_HOME"] = resolve_java_home() or ""
+        if not os.environ.get("HADOOP_HOME"):
+            os.environ["HADOOP_HOME"] = resolve_hadoop_home() or ""
+
+        os.environ.setdefault("SPARK_LOCAL_HOSTNAME", "localhost")
+        os.environ.setdefault("SPARK_LOCAL_IP", "127.0.0.1")
+        os.environ.setdefault("PYSPARK_PYTHON", sys.executable)
+        os.environ.setdefault("PYSPARK_DRIVER_PYTHON", sys.executable)
+
         builder = (
             SparkSession.builder.master("local[*]")
             .appName("check_env_delta")
+            .config("spark.local.hostname", "localhost")
+            .config("spark.driver.host", "127.0.0.1")
+            .config("spark.driver.bindAddress", "127.0.0.1")
             .config("spark.sql.shuffle.partitions", "1")
             .config("spark.sql.execution.arrow.pyspark.enabled", "true")
             .config("spark.sql.extensions", "io.delta.sql.DeltaSparkSessionExtension")

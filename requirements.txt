@@ -3,7 +3,7 @@ delta-spark>=3.1
 pyyaml
 requests
 python-dotenv
-pandas
+pandas<3.0
 pyarrow
 scikit-learn
 matplotlib

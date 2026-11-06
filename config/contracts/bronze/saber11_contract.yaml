@@ -1,4 +1,3 @@
-# TODO: verificar nombres reales contra la API; cambian entre 2019 y 2022.
 version: 1
 layer: bronze
 name: saber11
@@ -12,7 +11,7 @@ expected_headers:
   - cole_area_ubicacion
   - cole_jornada
   - cole_cod_depto_ubicacion
-  - cole_cod_mpio_ubicacion
+  - cole_cod_mcpio_ubicacion
   - fami_estratovivienda
   - fami_educacionpadre
   - fami_educacionmadre
