@@ -1,0 +1,27 @@
+# TODO: verificar nombres reales contra la API; cambian entre 2019 y 2022.
+version: 1
+layer: bronze
+name: saber11
+source: datos.gov.co (Socrata)
+periodos: ["20194", "20224"]
+expected_headers:
+  - periodo
+  - estu_consecutivo
+  - cole_cod_dane_establecimiento
+  - cole_naturaleza
+  - cole_area_ubicacion
+  - cole_jornada
+  - cole_cod_depto_ubicacion
+  - cole_cod_mpio_ubicacion
+  - fami_estratovivienda
+  - fami_educacionpadre
+  - fami_educacionmadre
+  - fami_tieneinternet
+  - fami_tienecomputador
+  - punt_global
+required_cols:
+  - estu_consecutivo
+  - punt_global
+numeric_cols:
+  - punt_global
+max_invalid_ratio: 0.2   # si mas del 20% es invalido, la ejecucion FALLA

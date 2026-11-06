@@ -1,0 +1,11 @@
+version: 1
+layer: bronze
+name: divipola
+source: DANE (codificacion DIVIPOLA)
+expected_headers:
+  - cod_depto
+  - departamento
+  - cod_mpio
+  - municipio
+required_cols: [cod_mpio]
+max_invalid_ratio: 0.05
