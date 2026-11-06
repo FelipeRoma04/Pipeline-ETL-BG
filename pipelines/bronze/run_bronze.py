@@ -19,7 +19,12 @@ logger = logging.getLogger(__name__)
 
 def create_spark_session() -> SparkSession:
     """Crea la SparkSession con Delta habilitado para esta capa."""
+    import os
+
     from delta import configure_spark_with_delta_pip
+
+    os.environ.setdefault("SPARK_LOCAL_HOSTNAME", "localhost")
+    os.environ.setdefault("SPARK_LOCAL_IP", "127.0.0.1")
 
     builder = (
         SparkSession.builder.appName("saber11_bronze")
