@@ -55,7 +55,10 @@ def load_bronze_dataframe(spark: SparkSession) -> DataFrame:
     """Carga la capa Bronce si existe; si no, genera un conjunto demo."""
     bronze_dir = Path(BRONZE_PATH)
     if bronze_dir.exists() and any(bronze_dir.iterdir()):
-        return spark.read.format("delta").load(str(BRONZE_PATH))
+        try:
+            return spark.read.format("delta").load(str(BRONZE_PATH))
+        except Exception:
+            logger.warning("La capa Bronce no es un Delta valido; se usa un dataset sintético para la ejecucion local.")
     logger.warning("No se encontro una capa Bronce real; se usa un dataset sintético para permitir la ejecucion local.")
     return _build_sample_bronze(spark)
 

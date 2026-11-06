@@ -48,38 +48,15 @@ def normalize_categorical(value: Any, alias_map: dict[str, str] | None = None) -
 
 def build_student_context(df: DataFrame) -> DataFrame:
     """Normaliza y tipa las columnas relevantes de la capa Plata."""
-    alias_maps = {
-        "fami_estratovivienda": {"0": "0", "1": "1", "2": "2", "3": "3", "4": "4", "5": "5", "6": "6"},
-        "fami_educacionpadre": {
-            "NINGUNA": "NINGUNA",
-            "PRIMARIA": "PRIMARIA",
-            "BACHILLER": "BACHILLER",
-            "TÉCNICO": "TECNICO",
-            "UNIVERSITARIA": "UNIVERSITARIA",
-            "POSTGRADO": "POSTGRADO",
-        },
-        "fami_educacionmadre": {
-            "NINGUNA": "NINGUNA",
-            "PRIMARIA": "PRIMARIA",
-            "BACHILLER": "BACHILLER",
-            "TÉCNICO": "TECNICO",
-            "UNIVERSITARIA": "UNIVERSITARIA",
-            "POSTGRADO": "POSTGRADO",
-        },
-        "cole_jornada": {"MAÑANA": "MANANA", "TARDE": "TARDE", "NOCHE": "NOCHE", "COMPLETA": "COMPLETA"},
-        "cole_area_ubicacion": {"URBANA": "URBANA", "RURAL": "RURAL"},
-        "cole_naturaleza": {"OFICIAL": "OFICIAL", "NO OFICIAL": "NO OFICIAL", "NO OFICIAL ": "NO OFICIAL"},
-    }
-
     normalized = df.select(
-        F.col("_periodo").alias("periodo"),
+        F.col("_periodo").cast("string").alias("periodo"),
         F.col("estu_consecutivo").cast("string").alias("estu_consecutivo"),
         F.col("cole_cod_dane_establecimiento").cast("string").alias("colegio_id"),
         F.col("cole_cod_depto_ubicacion").cast("string").alias("cod_depto"),
         F.col("cole_cod_mcpio_ubicacion").cast("string").alias("cod_mpio"),
-        F.col("cole_naturaleza").alias("cole_naturaleza_raw"),
-        F.col("cole_area_ubicacion").alias("cole_area_ubicacion_raw"),
-        F.col("cole_jornada").alias("cole_jornada_raw"),
+        F.col("cole_naturaleza").cast("string").alias("cole_naturaleza_raw"),
+        F.col("cole_area_ubicacion").cast("string").alias("cole_area_ubicacion_raw"),
+        F.col("cole_jornada").cast("string").alias("cole_jornada_raw"),
         F.col("fami_estratovivienda").cast("string").alias("fami_estratovivienda_raw"),
         F.col("fami_educacionpadre").cast("string").alias("fami_educacionpadre_raw"),
         F.col("fami_educacionmadre").cast("string").alias("fami_educacionmadre_raw"),
@@ -88,22 +65,29 @@ def build_student_context(df: DataFrame) -> DataFrame:
         F.col("punt_global").cast("double").alias("punt_global"),
     )
 
-    for col_name, alias_map in alias_maps.items():
-        normalized = normalized.withColumn(
-            col_name,
-            F.when(F.col(col_name + "_raw").isNull(), F.lit(""))
-            .otherwise(F.udf(lambda v: normalize_categorical(v, alias_map), "string")(F.col(col_name + "_raw"))),
-        )
+    normalized = normalized.withColumn("cole_naturaleza", F.upper(F.trim(F.col("cole_naturaleza_raw"))))
+    normalized = normalized.withColumn("cole_area_ubicacion", F.upper(F.trim(F.col("cole_area_ubicacion_raw"))))
+    normalized = normalized.withColumn("cole_jornada", F.upper(F.trim(F.col("cole_jornada_raw"))))
+    normalized = normalized.withColumn("fami_educacionpadre", F.upper(F.trim(F.col("fami_educacionpadre_raw"))))
+    normalized = normalized.withColumn("fami_educacionmadre", F.upper(F.trim(F.col("fami_educacionmadre_raw"))))
 
     normalized = normalized.withColumn(
         "es_oficial",
         F.lower(F.col("cole_naturaleza")).isin(["oficial"]),
     )
-    normalized = normalized.withColumn("fami_tieneinternet", F.udf(lambda v: 1.0 if as_bool(v) else 0.0, "double")(F.col("fami_tieneinternet_raw")))
-    normalized = normalized.withColumn("fami_tienecomputador", F.udf(lambda v: 1.0 if as_bool(v) else 0.0, "double")(F.col("fami_tienecomputador_raw")))
-    normalized = normalized.withColumn("fami_estratovivienda", F.udf(lambda v: safe_float(v, 0.0), "double")(F.col("fami_estratovivienda_raw")).cast("double"))
+    normalized = normalized.withColumn(
+        "fami_tieneinternet",
+        F.when(F.upper(F.trim(F.col("fami_tieneinternet_raw"))).isin("1", "SI", "YES", "TRUE", "Y"), F.lit(1.0)).otherwise(F.lit(0.0)),
+    )
+    normalized = normalized.withColumn(
+        "fami_tienecomputador",
+        F.when(F.upper(F.trim(F.col("fami_tienecomputador_raw"))).isin("1", "SI", "YES", "TRUE", "Y"), F.lit(1.0)).otherwise(F.lit(0.0)),
+    )
+    normalized = normalized.withColumn(
+        "fami_estratovivienda",
+        F.when(F.trim(F.col("fami_estratovivienda_raw")).cast("string").isin(["0", "1", "2", "3", "4", "5", "6"]), F.col("fami_estratovivienda_raw").cast("double")).otherwise(F.lit(0.0)),
+    )
     normalized = normalized.withColumn("municipio_id", F.concat(F.col("cod_depto"), F.lit("-"), F.col("cod_mpio")))
-
     normalized = normalized.withColumn(
         "indice_socioeconomico",
         (
@@ -115,8 +99,14 @@ def build_student_context(df: DataFrame) -> DataFrame:
         ).cast("double"),
     )
 
-    normalized = normalized.withColumn("cole_area_ubicacion", F.udf(lambda v: normalize_categorical(v, {"URBANA": "URBANA", "RURAL": "RURAL"}), "string")(F.col("cole_area_ubicacion_raw")))
-    normalized = normalized.withColumn("cole_jornada", F.udf(lambda v: normalize_categorical(v, {"MANANA": "MANANA", "TARDE": "TARDE", "NOCHE": "NOCHE", "COMPLETA": "COMPLETA"}), "string")(F.col("cole_jornada_raw")))
+    normalized = normalized.withColumn(
+        "cole_area_ubicacion",
+        F.when(F.col("cole_area_ubicacion") == "URBANA", F.lit("URBANA")).when(F.col("cole_area_ubicacion") == "RURAL", F.lit("RURAL")).otherwise(F.lit("URBANA")),
+    )
+    normalized = normalized.withColumn(
+        "cole_jornada",
+        F.when(F.col("cole_jornada") == "MANANA", F.lit("MANANA")).when(F.col("cole_jornada") == "TARDE", F.lit("TARDE")).when(F.col("cole_jornada") == "NOCHE", F.lit("NOCHE")).otherwise(F.lit("COMPLETA")),
+    )
 
     return normalized.drop(
         "cole_naturaleza_raw",
@@ -164,12 +154,15 @@ def build_divipola_dimension(df: DataFrame) -> DataFrame:
 def ensure_spark_session() -> SparkSession:
     """Factory para una sesion local con Delta habilitado."""
     import os
+    import sys
 
     from delta import configure_spark_with_delta_pip
 
-    os.environ.setdefault("SPARK_LOCAL_HOSTNAME", "localhost")
-    os.environ.setdefault("SPARK_LOCAL_IP", "127.0.0.1")
-    os.environ.setdefault("HADOOP_HOME", r"C:\hadoop")
+    os.environ["SPARK_LOCAL_HOSTNAME"] = "localhost"
+    os.environ["SPARK_LOCAL_IP"] = "127.0.0.1"
+    os.environ["HADOOP_HOME"] = r"C:\hadoop"
+    os.environ["PYSPARK_PYTHON"] = sys.executable
+    os.environ["PYSPARK_DRIVER_PYTHON"] = sys.executable
     path = os.environ.get("PATH", "")
     winutils_bin = os.path.join(os.environ["HADOOP_HOME"], "bin")
     if winutils_bin not in path:
