@@ -48,8 +48,36 @@ def make_headers() -> dict[str, str]:
     return headers
 
 
+def _build_sample_rows(period: str) -> list[dict[str, Any]]:
+    """Genera filas de ejemplo para permitir ejecucion local sin la API externa."""
+    return [
+        {
+            "periodo": period,
+            "estu_consecutivo": f"A{i}",
+            "cole_cod_dane_establecimiento": str(110000 + i),
+            "cole_naturaleza": "OFICIAL",
+            "cole_area_ubicacion": "URBANA" if i % 2 == 0 else "RURAL",
+            "cole_jornada": "MANANA",
+            "cole_cod_depto_ubicacion": "11",
+            "cole_cod_mcpio_ubicacion": f"{i:03d}",
+            "fami_estratovivienda": str((i % 6) + 1),
+            "fami_educacionpadre": "BACHILLER",
+            "fami_educacionmadre": "BACHILLER",
+            "fami_tieneinternet": "1" if i % 2 == 0 else "0",
+            "fami_tienecomputador": "1",
+            "punt_global": str(250 + (i * 5) % 150),
+        }
+        for i in range(1, 6)
+    ]
+
+
 def fetch_rows_for_period(period: str, limit: int | None = None, page_size: int = 50000) -> list[dict[str, Any]]:
     """Consulta todos los registros de un periodo, paginando la API de Socrata."""
+    if not SABER11_DATASET_ID:
+        logger.warning("SABER11_DATASET_ID no configurado; se usa dataset sintético para ejecución local.")
+        rows = _build_sample_rows(period)
+        return rows[:limit] if limit is not None else rows
+
     url = f"{SOCRATA_BASE_URL}/{SABER11_DATASET_ID}.json"
     rows: list[dict[str, Any]] = []
     offset = 0
