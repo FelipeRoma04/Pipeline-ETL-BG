@@ -2,6 +2,8 @@
 import argparse
 import logging
 
+from llm.run_llm import run_llm
+from ml.run_ml import run_ml
 from pipelines.bronze.run_bronze import run_bronze
 from pipelines.gold.run_gold import run_gold
 from pipelines.silver.run_silver import run_silver
@@ -29,10 +31,12 @@ def main() -> int:
         run_gold()
 
     if args.layer in {"ml", "all"}:
-        logger.info("Capa ML no ejecuta un entrenamiento completo sin dataset de referencia; se deja preparada para la validacion posterior.")
+        logger.info("Ejecutando capa ML")
+        run_ml()
 
     if args.layer in {"llm", "all"}:
-        logger.info("Capa LLM lista para generar explicacion JSON a partir de resultados ya calculados al final del pipeline.")
+        logger.info("Ejecutando capa LLM")
+        run_llm()
 
     logger.info("Pipeline finalizado para la capa %s", args.layer)
     return 0
