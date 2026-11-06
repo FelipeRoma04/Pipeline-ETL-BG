@@ -132,16 +132,16 @@ def build_student_context(df: DataFrame) -> DataFrame:
 
 def quarantine_invalid_rows(df: DataFrame) -> tuple[DataFrame, DataFrame]:
     """Separa filas validas de filas rechazadas por registros vacios o inconsistentes."""
-    required = ["periodo", "estu_consecutivo", "colegio_id", "punt_global"]
-    invalid = df.filter(
+    invalid_condition = (
         F.col("periodo").isNull()
-        | F.trim(F.col("periodo").cast("string")) == ""
+        | (F.trim(F.col("periodo").cast("string")) == "")
         | F.col("estu_consecutivo").isNull()
-        | F.trim(F.col("estu_consecutivo").cast("string")) == ""
+        | (F.trim(F.col("estu_consecutivo").cast("string")) == "")
         | F.col("colegio_id").isNull()
-        | F.trim(F.col("colegio_id").cast("string")) == ""
+        | (F.trim(F.col("colegio_id").cast("string")) == "")
         | F.col("punt_global").isNull()
     )
+    invalid = df.filter(invalid_condition)
     valid = df.exceptAll(invalid)
     invalid = invalid.withColumn("motivo_rechazo", F.lit("faltan campos obligatorios o puntaje nulo"))
     return valid, invalid
