@@ -1,7 +1,7 @@
 import os
 import sys
 
-os.environ["SPARK_LOCAL_HOSTNAME"] = "localhost"
+os.environ["SPARK_LOCAL_HOSTNAME"] = "127.0.0.1"
 os.environ["SPARK_LOCAL_IP"] = "127.0.0.1"
 os.environ["HADOOP_HOME"] = r"C:\hadoop"
 os.environ["PYSPARK_PYTHON"] = sys.executable

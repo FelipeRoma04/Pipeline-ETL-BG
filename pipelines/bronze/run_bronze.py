@@ -46,8 +46,9 @@ def create_spark_session() -> SparkSession:
 
     builder = (
         SparkSession.builder.appName("saber11_bronze")
-        .master("local[*]")
-        .config("spark.sql.shuffle.partitions", "8")
+        .master("local[2]")
+        .config("spark.sql.shuffle.partitions", "2")
+        .config("spark.default.parallelism", "2")
         .config("spark.sql.execution.arrow.pyspark.enabled", "true")
         .config("spark.local.hostname", "localhost")
         .config("spark.driver.host", "127.0.0.1")

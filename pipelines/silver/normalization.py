@@ -170,8 +170,9 @@ def ensure_spark_session() -> SparkSession:
 
     builder = (
         SparkSession.builder.appName("saber11_silver")
-        .master("local[*]")
-        .config("spark.sql.shuffle.partitions", "4")
+        .master("local[2]")
+        .config("spark.sql.shuffle.partitions", "2")
+        .config("spark.default.parallelism", "2")
         .config("spark.driver.host", "127.0.0.1")
         .config("spark.driver.bindAddress", "127.0.0.1")
         .config("spark.sql.extensions", "io.delta.sql.DeltaSparkSessionExtension")

@@ -32,8 +32,9 @@ def create_spark_session() -> SparkSession:
 
     builder = (
         SparkSession.builder.appName("saber11_gold")
-        .master("local[*]")
-        .config("spark.sql.shuffle.partitions", "4")
+        .master("local[2]")
+        .config("spark.sql.shuffle.partitions", "2")
+        .config("spark.default.parallelism", "2")
         .config("spark.driver.host", "127.0.0.1")
         .config("spark.driver.bindAddress", "127.0.0.1")
         .config("spark.sql.extensions", "io.delta.sql.DeltaSparkSessionExtension")
@@ -173,11 +174,11 @@ def run_gold(periodos: list[str] | None = None) -> dict[str, str]:
             }
 
         GOLD_PATH.mkdir(parents=True, exist_ok=True)
-        dim_colegio.write.format("delta").mode("overwrite").save(str(GOLD_PATH / "dim_colegio"))
-        dim_municipio.write.format("delta").mode("overwrite").save(str(GOLD_PATH / "dim_municipio"))
-        dim_periodo.write.format("delta").mode("overwrite").save(str(GOLD_PATH / "dim_periodo"))
-        fact.write.format("delta").mode("overwrite").save(str(GOLD_PATH / "fact_colegio_periodo"))
-        fact_anomalia.write.format("delta").mode("overwrite").save(str(GOLD_PATH / "fact_anomalia"))
+        dim_colegio.write.format("delta").mode("overwrite").option("overwriteSchema", "true").save(str(GOLD_PATH / "dim_colegio"))
+        dim_municipio.write.format("delta").mode("overwrite").option("overwriteSchema", "true").save(str(GOLD_PATH / "dim_municipio"))
+        dim_periodo.write.format("delta").mode("overwrite").option("overwriteSchema", "true").save(str(GOLD_PATH / "dim_periodo"))
+        fact.write.format("delta").mode("overwrite").option("overwriteSchema", "true").save(str(GOLD_PATH / "fact_colegio_periodo"))
+        fact_anomalia.write.format("delta").mode("overwrite").option("overwriteSchema", "true").save(str(GOLD_PATH / "fact_anomalia"))
 
         logger.info("Capa Oro completada en %s", GOLD_PATH)
         return {
