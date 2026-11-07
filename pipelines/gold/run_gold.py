@@ -14,7 +14,22 @@ logger = logging.getLogger(__name__)
 
 
 def create_spark_session() -> SparkSession:
-    """Crea la SparkSession con soporte Delta para la capa Oro."""
+    """En Databricks reusa la SparkSession activa; en local crea una con Delta pip."""
+    if is_databricks():
+        active = None
+        try:
+            active = SparkSession.getActiveSparkSession()
+        except AttributeError:
+            active = None  # Spark Connect: este cliente no expone sesion activa
+        if active is None:
+            # En notebooks Databricks la sesion vive en la variable global `spark`
+            import __main__
+
+            active = getattr(__main__, "spark", None)
+        if active is not None:
+            return active
+        return SparkSession.builder.appName("saber11_gold").getOrCreate()
+
     import os
     import sys
 
@@ -150,6 +165,7 @@ def build_fact_anomalia(df: DataFrame) -> DataFrame:
 def run_gold(periodos: list[str] | None = None) -> dict[str, str]:
     """Construye el esquema estrella de Oro desde la capa Plata, incluyendo anomalias y metricas analiticas."""
     spark = create_spark_session()
+    owns_session = not is_databricks()
     try:
         students = load_silver_estudiantes(spark, periodos=periodos)
 
@@ -190,7 +206,8 @@ def run_gold(periodos: list[str] | None = None) -> dict[str, str]:
             "fact_anomalia": str(GOLD_PATH / "fact_anomalia"),
         }
     finally:
-        spark.stop()
+        if owns_session:
+            spark.stop()
 
 
 def parse_args() -> argparse.Namespace:

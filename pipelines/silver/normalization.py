@@ -7,6 +7,8 @@ from typing import Any
 from pyspark.sql import DataFrame, SparkSession
 from pyspark.sql import functions as F
 
+from config.settings import is_databricks
+
 
 def normalize_text(value: Any) -> str:
     """Normaliza cadenas a mayusculas, sin tildes y sin espacios extras."""
@@ -152,7 +154,22 @@ def build_divipola_dimension(df: DataFrame) -> DataFrame:
 
 
 def ensure_spark_session() -> SparkSession:
-    """Factory para una sesion local con Delta habilitado."""
+    """En Databricks reusa la SparkSession activa; en local crea una con Delta pip."""
+    if is_databricks():
+        active = None
+        try:
+            active = SparkSession.getActiveSparkSession()
+        except AttributeError:
+            active = None  # Spark Connect: este cliente no expone sesion activa
+        if active is None:
+            # En notebooks Databricks la sesion vive en la variable global `spark`
+            import __main__
+
+            active = getattr(__main__, "spark", None)
+        if active is not None:
+            return active
+        return SparkSession.builder.appName("saber11_silver").getOrCreate()
+
     import os
     import sys
 

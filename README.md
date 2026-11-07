@@ -45,8 +45,7 @@ ENVIRONMENT=local
 USE_FALLBACK=true
 SABER11_DATASET_ID=
 SOCRATA_APP_TOKEN=
-UNITY_CATALOG=saber11
-UNITY_SCHEMA=analytics
+UNITY_CATALOG=workspace
 ```
 
 ## Local execution notes
@@ -54,76 +53,37 @@ UNITY_SCHEMA=analytics
 - Si `SABER11_DATASET_ID` no existe, el pipeline usa un dataset sintetico para validar el flujo localmente.
 - El flujo se puede lanzar con `--environment local` o `--environment databricks` segun el destino.
 
-## Configuracion para Databricks + Unity Catalog
-Este proyecto ya tiene un switch de ambiente para Databricks.
+## Ejecucion en Databricks + Unity Catalog
+El proyecto **detecta Databricks automaticamente** (`DATABRICKS_RUNTIME_VERSION`) y reusa la SparkSession del notebook. No hay que instalar nada: sklearn, requests y yaml ya vienen en el runtime. Las variables de entorno tienen defaults correctos; solo son opcionales para sobreescribir valores.
 
-### Variables de entorno recomendadas
+### Destino de datos (catalogo `workspace`)
+- Un esquema por capa: `workspace.bronze`, `workspace.silver`, `workspace.gold`.
+- Bronze: `workspace.bronze.saber11`, particionada por `_periodo`, escritura **idempotente por periodo** (`replaceWhere`) — re-ejecutar un periodo reemplaza su particion completa sin tocar los demas.
+- Silver: `estudiantes`, `quarantine`, `divipola`. Gold: `dim_colegio`, `dim_municipio`, `dim_periodo`, `fact_colegio_periodo`, `fact_anomalia`.
+- Salidas ML/LLM (JSON): `/Workspace/Users/<usuario>/saber11_data/gold/`.
+
+### Variables de entorno (todas opcionales, defaults correctos)
 ```bash
-ENVIRONMENT=databricks
-USE_FALLBACK=false
+ENVIRONMENT=databricks        # se autodetecta, no hace falta fijarlo
+USE_FALLBACK=false            # en Databricks el default ya es false
 SABER11_DATASET_ID=kgxf-xxbe
-SOCRATA_APP_TOKEN=<secret>
-UNITY_CATALOG=saber11
-UNITY_SCHEMA=analytics
+SOCRATA_APP_TOKEN=<opcional, solo evita rate limits>
+UNITY_CATALOG=workspace
 ```
 
-### Crear catalogo y esquema en Unity Catalog
-```sql
-CREATE CATALOG IF NOT EXISTS saber11;
-CREATE SCHEMA IF NOT EXISTS saber11.analytics;
-```
+### Notebooks de ejecucion (en la carpeta `notebooks/` del usuario en el workspace)
+- `01_run_pipeline_dbx` — pipeline completo con widgets: **periodos** (coma-separados) y **limit** (0 = sin limite).
+- `02_bronze_dbx`, `03_silver_dbx`, `04_gold_dbx`, `05_ml_dbx`, `06_llm_dbx` — un notebook por capa para demostrar cada ejecucion por separado.
 
-### Secret Scope en Databricks
-```bash
-databricks secrets create-scope --scope saber11 --initial-manage-principal users
-databricks secrets put --scope saber11 --key socrata_token --value "<tu-token-real>"
-```
+Cada notebook agrega este repo a `sys.path` y llama a los runners reales (`run_bronze`, `run_silver`, `run_gold`, `run_ml`, `run_llm`). El flujo local con `python main.py` sigue intacto para Windows.
 
-### Notebook de Databricks
-```python
-import os
-
-os.environ["ENVIRONMENT"] = "databricks"
-os.environ["USE_FALLBACK"] = "false"
-os.environ["SOCRATA_APP_TOKEN"] = dbutils.secrets.get(scope="saber11", key="socrata_token")
-os.environ["SABER11_DATASET_ID"] = "kgxf-xxbe"
-os.environ["SOCRATA_BASE_URL"] = "https://www.datos.gov.co/resource"
-os.environ["UNITY_CATALOG"] = "saber11"
-os.environ["UNITY_SCHEMA"] = "analytics"
-
-print("Configuracion de Databricks aplicada.")
-```
-
-### Validacion real con 1 periodo desde Databricks
-La validacion real debe empezar por 1 solo periodo para confirmar fuente, schema y contrato antes de cargar todo el dataset.
-
-```python
-!python /Workspace/Repos/<usuario>/Pipeline-ETL-BG/main.py --environment databricks --no-fallback --layer bronze --periodos 20194
-```
-
-Tambien se puede usar el script helper incluido:
-
-```bash
-python /Workspace/Repos/<usuario>/Pipeline-ETL-BG/scripts/validate_databricks_period.py
-```
-
-### Ejecutar capas siguientes
-```python
-!python /Workspace/Repos/<usuario>/Pipeline-ETL-BG/main.py --environment databricks --no-fallback --layer silver
-!python /Workspace/Repos/<usuario>/Pipeline-ETL-BG/main.py --environment databricks --no-fallback --layer gold
-!python /Workspace/Repos/<usuario>/Pipeline-ETL-BG/main.py --environment databricks --no-fallback --layer ml
-!python /Workspace/Repos/<usuario>/Pipeline-ETL-BG/main.py --environment databricks --no-fallback --layer llm
-```
-
-### Ejecutar todo el pipeline
-```python
-!python /Workspace/Repos/<usuario>/Pipeline-ETL-BG/main.py --environment databricks --no-fallback --layer all
-```
+> ⚠️ Bronze con `limit` bajo **encoge la particion** del periodo: usa `limit` solo para pruebas con periodos nuevos, no sobre datos ya cargados.
 
 ### Verificar tablas creadas
 ```sql
-SHOW TABLES IN saber11.analytics;
-SELECT * FROM saber11.analytics.bronze_raw LIMIT 10;
+SELECT _periodo, COUNT(*) FROM workspace.bronze.saber11 GROUP BY _periodo;   -- 20194: 1.096.524 | 20224: 1.065.888
+SELECT COUNT(*) FROM workspace.silver.estudiantes;                             -- 2.162.410 validas
+SELECT COUNT(*) FROM workspace.gold.fact_colegio_periodo;                     -- 20.539 hechos colegio-periodo
 ```
 
 ## Regla de idempotencia
@@ -144,11 +104,7 @@ python -m pytest -q
 - [x] Orquestacion principal lista en `main.py`
 - [x] Switch de ambiente local vs Databricks preparado
 - [x] Unity Catalog + Databricks documentado en este README
+- [x] Pipeline ejecutado end-to-end en Databricks (2,16 M filas en Bronze, ambos periodos)
 
 ## Nota de ejecucion real
-Este repo se puede ejecutar de manera local sin credenciales externas. Para ejecucion real en Databricks, hace falta:
-- token real de la API de Socrata,
-- `dataset_id` correcto,
-- catalogo y esquema creados en Unity Catalog,
-- cluster Databricks con permisos de escritura sobre UC,
-- validacion inicial de 1 periodo antes de cargar todo el dataset.
+Este repo se puede ejecutar de manera local sin credenciales externas. En Databricks ya corre sin pasos extra: los notebooks usan la SparkSession del workspace, el dataset publico de Socrata no requiere token (solo es opcional para evitar rate limits) y escriben en el catalogo `workspace`. Antes de cargar todo el dataset, valida 1 solo periodo (por ejemplo 20224).

@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import argparse
 import logging
+import time
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Iterator
 
 import requests
 from pyspark.sql import DataFrame, SparkSession
@@ -28,7 +29,23 @@ logger = logging.getLogger(__name__)
 
 
 def create_spark_session() -> SparkSession:
-    """Crea la SparkSession con Delta habilitado para esta capa."""
+    """En Databricks reusa la SparkSession activa; en local crea una con Delta pip."""
+    if is_databricks():
+        active = None
+        try:
+            active = SparkSession.getActiveSparkSession()
+        except AttributeError:
+            active = None  # Spark Connect: este cliente no expone sesion activa
+        if active is None:
+            # En notebooks Databricks la sesion vive en la variable global `spark`
+            import __main__
+
+            active = getattr(__main__, "spark", None)
+        if active is not None:
+            logger.info("Usando la SparkSession activa de Databricks.")
+            return active
+        return SparkSession.builder.appName("saber11_bronze").getOrCreate()
+
     import os
     import sys
 
@@ -91,8 +108,28 @@ def _build_sample_rows(period: str) -> list[dict[str, Any]]:
     ]
 
 
-def fetch_rows_for_period(period: str, limit: int | None = None, page_size: int = 50000) -> list[dict[str, Any]]:
-    """Consulta los registros del periodo usando la API real o un dataset local de respaldo."""
+def _get_with_retry(
+    url: str, params: dict[str, Any], timeout: int = 120, attempts: int = 3, backoff: int = 10
+) -> list[dict[str, Any]]:
+    """GET a la API Socrata con reintentos y backoff progresivo."""
+    last_error: Exception | None = None
+    for attempt in range(1, attempts + 1):
+        try:
+            response = requests.get(url, params=params, headers=make_headers(), timeout=timeout)
+            response.raise_for_status()
+            return response.json()
+        except Exception as exc:  # reintenta cualquier fallo de red/HTTP
+            last_error = exc
+            wait_seconds = backoff * attempt
+            logger.warning("Intento %s/%s fallo (%s). Reintento en %ss.", attempt, attempts, exc, wait_seconds)
+            time.sleep(wait_seconds)
+    raise RuntimeError(f"GET {url} fallo tras {attempts} intentos: {last_error}")
+
+
+def fetch_pages_for_period(
+    period: str, limit: int | None = None, page_size: int = 50000
+) -> Iterator[list[dict[str, Any]]]:
+    """Generador que entrega paginas de registros del periodo (API real o fallback)."""
     if should_use_fallback():
         logger.warning(
             "Modo local/fallback activo: env=%s, dataset_id='%s'. Se usa un dataset sintético para validar el flujo.",
@@ -100,35 +137,42 @@ def fetch_rows_for_period(period: str, limit: int | None = None, page_size: int 
             SABER11_DATASET_ID,
         )
         rows = _build_sample_rows(period)
-        return rows[:limit] if limit is not None else rows
+        yield rows[:limit] if limit is not None else rows
+        return
 
     if not SABER11_DATASET_ID:
         raise ValueError("SABER11_DATASET_ID no configurado y USE_FALLBACK está desactivado.")
 
     url = f"{SOCRATA_BASE_URL}/{SABER11_DATASET_ID}.json"
-    rows: list[dict[str, Any]] = []
     offset = 0
+    fetched = 0
 
     while True:
-        request_limit = min(page_size, limit) if limit is not None else page_size
+        request_limit = min(page_size, limit - fetched) if limit is not None else page_size
+        if request_limit <= 0:
+            return
         params: dict[str, Any] = {
             "$where": f"periodo='{period}'",
             "$limit": request_limit,
             "$offset": offset,
         }
-        response = requests.get(url, params=params, headers=make_headers(), timeout=120)
-        response.raise_for_status()
-        batch = response.json()
+        batch = _get_with_retry(url, params)
         if not batch:
-            break
-
-        rows.extend(batch)
-        if limit is not None and len(rows) >= limit:
-            return rows[:limit]
+            return
+        yield batch
+        fetched += len(batch)
+        if limit is not None and fetched >= limit:
+            return
         if len(batch) < request_limit:
-            break
+            return
         offset += request_limit
 
+
+def fetch_rows_for_period(period: str, limit: int | None = None, page_size: int = 50000) -> list[dict[str, Any]]:
+    """Compatibilidad: devuelve todas las filas del periodo en una sola lista."""
+    rows: list[dict[str, Any]] = []
+    for page in fetch_pages_for_period(period, limit=limit, page_size=page_size):
+        rows.extend(page)
     return rows
 
 
@@ -139,6 +183,35 @@ def normalize_record(record: dict[str, Any], period: str) -> dict[str, Any]:
     normalized["_ingest_ts"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     normalized["_fuente"] = "socrata_datos_gov_co"
     return normalized
+
+
+def _homogenize_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Asegura claves iguales en todas las filas de una pagina (Socrata omite claves nulas)."""
+    keys: list[str] = []
+    seen: set[str] = set()
+    for row in rows:
+        for key in row:
+            if key not in seen:
+                seen.add(key)
+                keys.append(key)
+    return [{key: row.get(key) for key in keys} for row in rows]
+
+
+def to_period_df(spark: SparkSession, pages: Iterator[list[dict[str, Any]]], period: str) -> DataFrame:
+    """Construye el DataFrame del periodo uniendo paginas con allowMissingColumns."""
+    df: DataFrame | None = None
+    total = 0
+    for page in pages:
+        if not page:
+            continue
+        page_rows = [normalize_record(row, period) for row in _homogenize_rows(page)]
+        page_df = spark.createDataFrame(page_rows)
+        df = page_df if df is None else df.unionByName(page_df, allowMissingColumns=True)
+        total += len(page_rows)
+        logger.info("Periodo %s: %s filas acumuladas", period, total)
+    if df is None:
+        raise ValueError(f"No se obtuvieron filas para el periodo {period}.")
+    return df
 
 
 def to_raw_df(spark: SparkSession, rows: list[dict[str, Any]], period: str) -> DataFrame:
@@ -185,10 +258,21 @@ def validate_contract(df: DataFrame, contract: dict[str, Any]) -> None:
 
 
 def write_delta_partition(df: DataFrame, period: str) -> str:
-    """Escribe el periodo en Delta local o en Unity Catalog según el ambiente activo."""
+    """Escribe el periodo en Delta local o en Unity Catalog de forma idempotente."""
     if is_databricks():
-        table_name = get_uc_table_name("bronze", "raw")
-        df.write.format("delta").mode("overwrite").option("overwriteSchema", "true").saveAsTable(table_name)
+        table_name = get_uc_table_name("bronze", "saber11")
+        spark_session = df.sparkSession
+        df = df.select([F.col(c).cast("string") for c in df.columns])
+        if spark_session.catalog.tableExists(table_name):
+            # Escritura idempotente: reemplaza solo la particion del periodo
+            existing_cols = spark_session.table(table_name).columns
+            missing = [c for c in existing_cols if c not in df.columns]
+            if missing:
+                df = df.select("*", *[F.lit(None).cast("string").alias(c) for c in missing])
+            df = df.select(*existing_cols)
+            (df.write.format("delta").mode("overwrite").option("replaceWhere", f"_periodo = '{period}'").saveAsTable(table_name))
+        else:
+            df.write.format("delta").mode("overwrite").partitionBy("_periodo").saveAsTable(table_name)
         logger.info("Bronce escrito en Unity Catalog: %s para periodo %s", table_name, period)
         return table_name
 
@@ -202,6 +286,7 @@ def write_delta_partition(df: DataFrame, period: str) -> str:
 def run_bronze(periodos: list[str] | None = None, limit: int | None = None) -> list[str]:
     """Runner principal de la capa Bronce."""
     spark = create_spark_session()
+    owns_session = not is_databricks()
     try:
         selected_periodos = periodos or PERIODOS
         contract = load_contract("saber11_contract")
@@ -209,17 +294,16 @@ def run_bronze(periodos: list[str] | None = None, limit: int | None = None) -> l
 
         for period in selected_periodos:
             logger.info("Consultando periodo %s desde la API", period)
-            rows = fetch_rows_for_period(period, limit=limit)
-            logger.info("Periodo %s: %s filas recuperadas", period, len(rows))
+            df = to_period_df(spark, fetch_pages_for_period(period, limit=limit), period)
 
-            df = to_raw_df(spark, rows, period)
             validate_contract(df, contract)
             output_path = write_delta_partition(df, period)
             results.append(output_path)
 
         return results
     finally:
-        spark.stop()
+        if owns_session:
+            spark.stop()
 
 
 def parse_args() -> argparse.Namespace:
@@ -231,5 +315,5 @@ def parse_args() -> argparse.Namespace:
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(name)s | %(message)s")
-    periodos = parse_args().periodos
-    run_bronze(periodos=periodos, limit=parse_args().limit)
+    args = parse_args()
+    run_bronze(periodos=args.periodos, limit=args.limit)

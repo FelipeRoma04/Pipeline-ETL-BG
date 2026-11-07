@@ -55,7 +55,7 @@ def load_bronze_dataframe(spark: SparkSession) -> DataFrame:
     """Carga la capa Bronce local o desde Unity Catalog; si no existe, genera un conjunto demo."""
     if is_databricks():
         try:
-            table_name = get_uc_table_name("bronze", "raw")
+            table_name = get_uc_table_name("bronze", "saber11")
             return spark.read.table(table_name)
         except Exception:
             logger.warning("No fue posible leer la capa Bronce desde Unity Catalog; se usara fallback local.")
@@ -73,6 +73,7 @@ def load_bronze_dataframe(spark: SparkSession) -> DataFrame:
 def run_silver(periodos: list[str] | None = None) -> dict[str, str]:
     """Ejecuta la transformacion de la capa Plata y escribe tablas Delta localmente o en UC."""
     spark = ensure_spark_session()
+    owns_session = not is_databricks()
     try:
         bronze_df = load_bronze_dataframe(spark)
         student_df = build_student_context(bronze_df)
@@ -101,7 +102,8 @@ def run_silver(periodos: list[str] | None = None) -> dict[str, str]:
             "divipola": str(SILVER_PATH / "divipola"),
         }
     finally:
-        spark.stop()
+        if owns_session:
+            spark.stop()
 
 
 def parse_args() -> argparse.Namespace:
