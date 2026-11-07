@@ -7,9 +7,11 @@ from ml.run_ml import run_ml
 def test_ml_summary_generates_metrics() -> None:
     summary = run_ml()
     assert summary["num_registros"] > 0
+    assert summary["split"]["strategy"] == "agrupado_por_colegio"
     assert "linear_regression" in summary["modelos"]
     assert "random_forest" in summary["modelos"]
     assert "mlp" in summary["modelos"]
+    assert "residual" in summary["modelos"]["linear_regression"]
 
 
 def test_llm_summary_is_structured() -> None:

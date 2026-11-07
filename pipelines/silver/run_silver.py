@@ -6,7 +6,7 @@ from pathlib import Path
 
 from pyspark.sql import DataFrame, SparkSession
 
-from config.settings import BRONZE_PATH, SILVER_PATH
+from config.settings import BRONZE_PATH, SILVER_PATH, get_uc_table_name, is_databricks
 from pipelines.silver.normalization import build_divipola_dimension, build_student_context, ensure_spark_session, quarantine_invalid_rows
 
 logger = logging.getLogger(__name__)
@@ -52,7 +52,14 @@ def _build_sample_bronze(spark: SparkSession) -> DataFrame:
 
 
 def load_bronze_dataframe(spark: SparkSession) -> DataFrame:
-    """Carga la capa Bronce si existe; si no, genera un conjunto demo."""
+    """Carga la capa Bronce local o desde Unity Catalog; si no existe, genera un conjunto demo."""
+    if is_databricks():
+        try:
+            table_name = get_uc_table_name("bronze", "raw")
+            return spark.read.table(table_name)
+        except Exception:
+            logger.warning("No fue posible leer la capa Bronce desde Unity Catalog; se usara fallback local.")
+
     bronze_dir = Path(BRONZE_PATH)
     if bronze_dir.exists() and any(bronze_dir.iterdir()):
         try:
@@ -64,12 +71,23 @@ def load_bronze_dataframe(spark: SparkSession) -> DataFrame:
 
 
 def run_silver(periodos: list[str] | None = None) -> dict[str, str]:
-    """Ejecuta la transformacion de la capa Plata y escribe tablas Delta."""
+    """Ejecuta la transformacion de la capa Plata y escribe tablas Delta localmente o en UC."""
     spark = ensure_spark_session()
     try:
         bronze_df = load_bronze_dataframe(spark)
         student_df = build_student_context(bronze_df)
         valid_df, quarantine_df = quarantine_invalid_rows(student_df)
+
+        if is_databricks():
+            valid_df.write.format("delta").mode("overwrite").option("overwriteSchema", "true").saveAsTable(get_uc_table_name("silver", "estudiantes"))
+            quarantine_df.write.format("delta").mode("overwrite").option("overwriteSchema", "true").saveAsTable(get_uc_table_name("silver", "quarantine"))
+            build_divipola_dimension(student_df).write.format("delta").mode("overwrite").option("overwriteSchema", "true").saveAsTable(get_uc_table_name("silver", "divipola"))
+            logger.info("Capa Plata terminada. Tablas escritas en Unity Catalog.")
+            return {
+                "estudiantes": get_uc_table_name("silver", "estudiantes"),
+                "quarantine": get_uc_table_name("silver", "quarantine"),
+                "divipola": get_uc_table_name("silver", "divipola"),
+            }
 
         SILVER_PATH.mkdir(parents=True, exist_ok=True)
         valid_df.write.format("delta").mode("overwrite").save(str(SILVER_PATH / "estudiantes"))

@@ -12,7 +12,17 @@ from pyspark.sql import DataFrame, SparkSession
 from pyspark.sql import functions as F
 
 from config.contract_loader import load_contract
-from config.settings import BRONZE_PATH, PERIODOS, SABER11_DATASET_ID, SOCRATA_BASE_URL, SOCRATA_APP_TOKEN
+from config.settings import (
+    BRONZE_PATH,
+    PERIODOS,
+    SABER11_DATASET_ID,
+    SOCRATA_BASE_URL,
+    SOCRATA_APP_TOKEN,
+    ENVIRONMENT,
+    get_uc_table_name,
+    is_databricks,
+    should_use_fallback,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -80,20 +90,28 @@ def _build_sample_rows(period: str) -> list[dict[str, Any]]:
 
 
 def fetch_rows_for_period(period: str, limit: int | None = None, page_size: int = 50000) -> list[dict[str, Any]]:
-    """Consulta todos los registros de un periodo, paginando la API de Socrata."""
-    if not SABER11_DATASET_ID:
-        logger.warning("SABER11_DATASET_ID no configurado; se usa dataset sintético para ejecución local.")
+    """Consulta los registros del periodo usando la API real o un dataset local de respaldo."""
+    if should_use_fallback():
+        logger.warning(
+            "Modo local/fallback activo: env=%s, dataset_id='%s'. Se usa un dataset sintético para validar el flujo.",
+            ENVIRONMENT,
+            SABER11_DATASET_ID,
+        )
         rows = _build_sample_rows(period)
         return rows[:limit] if limit is not None else rows
+
+    if not SABER11_DATASET_ID:
+        raise ValueError("SABER11_DATASET_ID no configurado y USE_FALLBACK está desactivado.")
 
     url = f"{SOCRATA_BASE_URL}/{SABER11_DATASET_ID}.json"
     rows: list[dict[str, Any]] = []
     offset = 0
 
     while True:
+        request_limit = min(page_size, limit) if limit is not None else page_size
         params: dict[str, Any] = {
             "$where": f"periodo='{period}'",
-            "$limit": min(page_size, limit) if limit is not None else page_size,
+            "$limit": request_limit,
             "$offset": offset,
         }
         response = requests.get(url, params=params, headers=make_headers(), timeout=120)
@@ -105,9 +123,9 @@ def fetch_rows_for_period(period: str, limit: int | None = None, page_size: int 
         rows.extend(batch)
         if limit is not None and len(rows) >= limit:
             return rows[:limit]
-        if len(batch) < params["$limit"]:
+        if len(batch) < request_limit:
             break
-        offset += params["$limit"]
+        offset += request_limit
 
     return rows
 
@@ -165,7 +183,13 @@ def validate_contract(df: DataFrame, contract: dict[str, Any]) -> None:
 
 
 def write_delta_partition(df: DataFrame, period: str) -> str:
-    """Escribe el periodo en Delta con partición por periodo y reemplazo idempotente."""
+    """Escribe el periodo en Delta local o en Unity Catalog según el ambiente activo."""
+    if is_databricks():
+        table_name = get_uc_table_name("bronze", "raw")
+        df.write.format("delta").mode("overwrite").option("overwriteSchema", "true").saveAsTable(table_name)
+        logger.info("Bronce escrito en Unity Catalog: %s para periodo %s", table_name, period)
+        return table_name
+
     BRONZE_PATH.mkdir(parents=True, exist_ok=True)
     output_path = str(BRONZE_PATH)
     df.write.format("delta").mode("overwrite").option("replaceWhere", f"_periodo = '{period}'").partitionBy("_periodo").save(output_path)
