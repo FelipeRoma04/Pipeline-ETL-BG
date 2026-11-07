@@ -1,9 +1,43 @@
 """Configuracion central. Lee variables de entorno (.env)."""
 import os
+import shutil
+import urllib.request
 from pathlib import Path
+
 from dotenv import load_dotenv
 
 load_dotenv()
+
+
+def ensure_hadoop_windows_env() -> str:
+    """Configura una ruta local de Hadoop para Spark en Windows cuando falta winutils."""
+    if os.name != "nt":
+        return os.environ.get("HADOOP_HOME", "")
+
+    hadoop_home = Path(os.environ.get("HADOOP_HOME") or r"C:\hadoop")
+    bin_dir = hadoop_home / "bin"
+    bin_dir.mkdir(parents=True, exist_ok=True)
+    winutils = bin_dir / "winutils.exe"
+
+    if not winutils.exists():
+        url = "https://github.com/cdarlint/winutils/raw/master/hadoop-3.4.2/bin/winutils.exe"
+        try:
+            with urllib.request.urlopen(url, timeout=30) as response, open(winutils, "wb") as target:
+                shutil.copyfileobj(response, target)
+        except Exception:
+            pass
+
+    if winutils.exists():
+        os.environ["HADOOP_HOME"] = str(hadoop_home)
+        path_value = os.environ.get("PATH", "")
+        if str(bin_dir) not in path_value.split(";"):
+            os.environ["PATH"] = str(bin_dir) + (";" if path_value else "") + path_value
+        return str(hadoop_home)
+
+    return str(hadoop_home)
+
+
+ensure_hadoop_windows_env()
 
 ENVIRONMENT = os.getenv("ENVIRONMENT", "local").strip().lower()
 USE_FALLBACK = os.getenv("USE_FALLBACK", "true" if ENVIRONMENT == "local" else "false").strip().lower() in {"1", "true", "yes", "on"}

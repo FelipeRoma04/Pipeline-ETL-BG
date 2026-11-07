@@ -34,23 +34,24 @@ def create_spark_session() -> SparkSession:
 
     from delta import configure_spark_with_delta_pip
 
-    os.environ["SPARK_LOCAL_HOSTNAME"] = "localhost"
-    os.environ["SPARK_LOCAL_IP"] = "127.0.0.1"
-    os.environ["HADOOP_HOME"] = r"C:\hadoop"
-    os.environ["PYSPARK_PYTHON"] = sys.executable
-    os.environ["PYSPARK_DRIVER_PYTHON"] = sys.executable
-    path = os.environ.get("PATH", "")
-    winutils_bin = os.path.join(os.environ["HADOOP_HOME"], "bin")
-    if winutils_bin not in path:
-        os.environ["PATH"] = path + (";" if path else "") + winutils_bin
+    os.environ.setdefault("SPARK_LOCAL_HOSTNAME", "127.0.0.1")
+    os.environ.setdefault("SPARK_LOCAL_IP", "127.0.0.1")
+    os.environ.setdefault("PYSPARK_PYTHON", sys.executable)
+    os.environ.setdefault("PYSPARK_DRIVER_PYTHON", sys.executable)
+    if os.name == "nt":
+        os.environ.setdefault("HADOOP_HOME", r"C:\hadoop")
+        path = os.environ.get("PATH", "")
+        winutils_bin = os.path.join(os.environ["HADOOP_HOME"], "bin")
+        if winutils_bin not in path.split(";"):
+            os.environ["PATH"] = path + (";" if path else "") + winutils_bin
 
     builder = (
         SparkSession.builder.appName("saber11_bronze")
-        .master("local[2]")
-        .config("spark.sql.shuffle.partitions", "2")
-        .config("spark.default.parallelism", "2")
+        .master("local[1]")
+        .config("spark.sql.shuffle.partitions", "1")
+        .config("spark.default.parallelism", "1")
         .config("spark.sql.execution.arrow.pyspark.enabled", "true")
-        .config("spark.local.hostname", "localhost")
+        .config("spark.local.hostname", "127.0.0.1")
         .config("spark.driver.host", "127.0.0.1")
         .config("spark.driver.bindAddress", "127.0.0.1")
         .config("spark.sql.extensions", "io.delta.sql.DeltaSparkSessionExtension")
