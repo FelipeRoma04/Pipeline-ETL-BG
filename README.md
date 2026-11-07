@@ -308,10 +308,3 @@ La suite cubre validación de contratos, reglas de normalización, capa Gold y v
 ## 💡 Mensaje final
 
 Este proyecto está pensado para unir ingeniería de datos, analítica predictiva y coordinación de IA explicativa en un único flujo que convierta información pública en decisiones útiles para educación. La idea central es no solo producir métricas, sino generar una visión accionable y comprensible del desempeño escolar.
-
-Si quieres, en el siguiente paso te puedo dejar este README aún más tipo "portfolio / GitHub showcase" con:
-
-- banner hero más impactante,
-- secciones de features premium,
-- badges de status y arquitectura,
-- versión preparada para publicar en GitHub como proyecto principal.
